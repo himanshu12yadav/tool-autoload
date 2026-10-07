@@ -1,0 +1,32 @@
+name: Build macOS app
+
+# Builds AutoReload-macos-<arch>.dmg on GitHub's Mac machines. Run it from the "Actions" tab
+# ("Run workflow"), or push a tag such as v1.0. Download the .dmg from the run's "Artifacts".
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15        # Apple Silicon (arm64)
+            arch: arm64
+          - runner: macos-15-intel  # Intel (x86_64)
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build, self-test and package
+        run: bash packaging/build_macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AutoReload-macos-${{ matrix.arch }}
+          path: release/macos/*.dmg
+          if-no-files-found: error
