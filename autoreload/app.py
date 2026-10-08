@@ -8,7 +8,7 @@ from pathlib import Path
 
 import customtkinter as ctk
 
-from . import chrome, settings
+from . import __version__, chrome, settings
 from .engine import Engine, JobEvent, LogEvent
 from .job import Job, format_duration, normalize_url, parse_duration, validate
 
@@ -94,7 +94,7 @@ class JobRow:
 class App(ctk.CTk):
     def __init__(self, settings_path: Path | None = None, engine_factory=Engine):
         super().__init__()
-        self.title("Auto Reload")
+        self.title(f"Auto Reload v{__version__}")
         self._fit_to_screen(920, 720)
         self.minsize(700, 520)
 

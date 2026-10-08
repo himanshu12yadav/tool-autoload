@@ -2,6 +2,12 @@ import sys
 
 
 def main() -> None:
+    if len(sys.argv) == 2 and sys.argv[1] == "--version":
+        from autoreload import __version__
+
+        print(__version__)
+        return
+
     if len(sys.argv) >= 3 and sys.argv[1] == "--selftest":
         from autoreload import selftest
 

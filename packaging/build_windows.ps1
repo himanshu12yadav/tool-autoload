@@ -5,7 +5,13 @@ Set-Location (Split-Path -Parent $PSScriptRoot)
 $py = ".\.venv\Scripts\python.exe"
 
 & $py -m pip install --quiet pyinstaller
+$versionFile = Join-Path (Get-Location) "build\version_info.txt"  # absolute: --specpath makes relative paths resolve inside build\
+& $py packaging\make_version_file.py $versionFile
+if ($LASTEXITCODE -ne 0) { throw "Could not write the version file" }
+$version = (& $py -c "from autoreload import __version__; print(__version__)").Trim()
+
 & $py -m PyInstaller --noconfirm --clean --onefile --windowed --name AutoReload `
+    --version-file $versionFile `
     --collect-data customtkinter --collect-all playwright `
     --distpath dist --workpath build --specpath build main.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
@@ -32,5 +38,5 @@ Copy-Item packaging\windows-readme.txt "$stage\README.txt"
 $zip = "release\windows\AutoReload-windows-$arch.zip"
 Compress-Archive -Path $stage -DestinationPath $zip -Force
 Remove-Item -Recurse -Force release\windows\_stage
-"Done: $target"
+"Done: $target (v$version)"
 "Done: $zip"
