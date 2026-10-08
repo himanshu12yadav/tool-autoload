@@ -164,23 +164,28 @@ class App(ctk.CTk):
         self.count_entry.grid(row=1, column=6, pady=(0, 6))
         ctk.CTkCheckBox(box, text="Infinite", variable=self.infinite_var, command=self._sync_count_state,
                         width=20).grid(row=1, column=7, padx=12, pady=(0, 6))
-        self._sync_count_state()
 
         ctk.CTkLabel(box, text="Run for").grid(row=2, column=0, padx=(12, 6), pady=(0, 6), sticky="w")
         runfor = ctk.CTkFrame(box, fg_color="transparent")
         runfor.grid(row=2, column=1, columnspan=7, pady=(0, 6), sticky="w")
         self.duration_vars: dict[str, ctk.StringVar] = {}
+        self.duration_boxes: list[ctk.CTkComboBox] = []
         for key, label, choices in DURATION_FIELDS:
             var = ctk.StringVar(value="0")
             self.duration_vars[key] = var
-            ctk.CTkComboBox(runfor, values=choices, variable=var, width=66).pack(side="left")
+            box_ = ctk.CTkComboBox(runfor, values=choices, variable=var, width=66)
+            box_.pack(side="left")
+            self.duration_boxes.append(box_)
             ctk.CTkLabel(runfor, text=label).pack(side="left", padx=(4, 12))
-        ctk.CTkLabel(runfor, text="all 0 = no limit · stops when this or Reloads comes first",
+        ctk.CTkLabel(runfor, text="all 0 = no limit · disabled while Reloads is above 0",
                      text_color=("gray35", "gray65")).pack(side="left", padx=(4, 0))
         try:
             self._set_duration_fields(parse_duration(form["duration"]))
         except ValueError:
             pass  # unreadable saved text: leave the fields at 0 (no limit)
+        for var in (self.count_var, self.infinite_var):
+            var.trace_add("write", lambda *_: self._sync_count_state())
+        self._sync_count_state()
 
         self.mine_var = ctk.BooleanVar(value=form["browser_mode"] == "mine")
         self.port_var = ctk.StringVar(value=str(form["debug_port"]))
@@ -210,8 +215,16 @@ class App(ctk.CTk):
         self.log = ctk.CTkTextbox(self, state="disabled", wrap="none")
         self.log.grid(row=3, column=0, sticky="nsew", padx=12, pady=(0, 12))
 
+    def _count_limits_run(self) -> bool:
+        """True when a Reloads count above 0 is in charge, so the Run for timer is switched off."""
+        raw = self.count_var.get().strip()
+        return not self.infinite_var.get() and raw.isdigit() and int(raw) > 0
+
     def _sync_count_state(self) -> None:
         self.count_entry.configure(state="disabled" if self.infinite_var.get() else "normal")
+        state = "disabled" if self._count_limits_run() else "normal"
+        for box in self.duration_boxes:
+            box.configure(state=state)
 
     # ---- actions -------------------------------------------------------------------
 
@@ -229,18 +242,21 @@ class App(ctk.CTk):
         url = normalize_url(self.url_var.get())
         interval = _parse_number(self.interval_var.get(), "Interval")
         jitter = _parse_number(self.jitter_var.get() or "0", "Jitter")
+        duration = None if self._count_limits_run() else self._duration_seconds()
         count = None
         if not self.infinite_var.get():
             raw = self.count_var.get().strip()
             if not raw.isdigit():
                 raise ValueError("Reloads must be a whole number")
             count = int(raw)
+            if count == 0 and duration:
+                count = None  # Reloads 0 + a Run for time: the timer alone ends the job
         raw_tabs = self.tabs_var.get().strip() or "1"
         if not raw_tabs.isdigit():
             raise ValueError("Tabs must be a whole number")
         job = Job(url=url, interval_s=interval, jitter_s=jitter,
                   mode=LABEL_TO_MODE[self.mode_var.get()], count=count, tabs=int(raw_tabs),
-                  duration_s=self._duration_seconds())
+                  duration_s=duration)
         validate(job)
         return job
 

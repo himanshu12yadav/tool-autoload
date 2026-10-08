@@ -80,7 +80,7 @@ def test_add_job_creates_row_and_persists(app):
     ({"tabs": "x"}, "Tabs"),
     ({"tabs": 0}, "tabs"),
     ({"tabs": 99}, "tabs"),
-    ({"duration": "5s", "interval": 30}, "Run for"),  # shorter than one interval
+    ({"duration": "5s", "interval": 30, "infinite": True}, "Run for"),  # shorter than one interval
 ])
 def test_bad_input_shows_error_and_adds_nothing(app, kw, fragment):
     fill(app, **kw)
@@ -119,7 +119,7 @@ def test_a_bad_event_does_not_stop_the_event_pump(app, monkeypatch):
 
 
 def test_run_for_is_stored_shown_and_persisted(app):
-    fill(app, interval=5, duration="2h")
+    fill(app, interval=5, duration="2h", infinite=True)
     app.add_job()
     row = next(iter(app.rows.values()))
     assert row.job.duration_s == 7200
@@ -131,7 +131,7 @@ def test_run_for_is_stored_shown_and_persisted(app):
 
 @pytest.mark.parametrize("key, value", [("h", "abc"), ("m", "-5"), ("s", "1.5"), ("d", "2x")])
 def test_run_for_boxes_must_hold_whole_numbers(app, key, value):
-    fill(app)
+    fill(app, infinite=True)
     app.duration_vars[key].set(value)
     app.add_job()
     assert not app.rows
@@ -158,7 +158,7 @@ def test_run_for_boxes_all_zero_or_blank_mean_no_limit(app):
 
 
 def test_run_for_boxes_come_back_after_restart(app, tmp_path):
-    fill(app, url="https://keep.me", interval=5, duration="1d 2h")
+    fill(app, url="https://keep.me", interval=5, duration="1d 2h", infinite=True)
     app.add_job()
     app.close()
 
@@ -167,6 +167,128 @@ def test_run_for_boxes_come_back_after_restart(app, tmp_path):
     try:
         second.withdraw()
         assert {k: v.get() for k, v in second.duration_vars.items()} == {"d": "1", "h": "2", "m": "0", "s": "0"}
+    finally:
+        second.close()
+
+
+def _box_states(app):
+    return {box.cget("state") for box in app.duration_boxes}
+
+
+def test_run_for_is_disabled_while_reloads_is_above_zero(app):
+    fill(app, count=3, duration="2h")
+    assert _box_states(app) == {"disabled"}
+    app.add_job()
+    row = next(iter(app.rows.values()))
+    assert row.job.duration_s is None
+    assert " for " not in row.meta.cget("text")
+
+
+def test_run_for_comes_back_when_reloads_is_cleared_or_infinite(app):
+    app.infinite_var.set(False)
+    app.count_var.set("5")
+    assert _box_states(app) == {"disabled"}
+    app.count_var.set("0")
+    assert _box_states(app) == {"normal"}
+    app.count_var.set("5")
+    app.infinite_var.set(True)
+    assert _box_states(app) == {"normal"}
+
+
+@pytest.mark.parametrize("count, infinite, expected", [
+    ("1", False, "disabled"),       # smallest count that still takes over
+    ("100", False, "disabled"),
+    (" 7 ", False, "disabled"),     # stray spaces are ignored
+    ("007", False, "disabled"),
+    ("0", False, "normal"),
+    ("", False, "normal"),          # cleared while typing
+    ("abc", False, "normal"),       # not a number: nothing to take over, error shows on Add
+    ("-3", False, "normal"),
+    ("1.5", False, "normal"),
+    ("100", True, "normal"),        # Infinite wins over a typed count
+    ("", True, "normal"),
+])
+def test_run_for_state_for_each_reloads_value(app, count, infinite, expected):
+    app.infinite_var.set(infinite)
+    app.count_var.set(count)
+    assert _box_states(app) == {expected}
+
+
+def test_toggling_infinite_back_and_forth_follows_the_count(app):
+    app.count_var.set("10")
+    for infinite, expected in [(False, "disabled"), (True, "normal"), (False, "disabled"), (True, "normal")]:
+        app.infinite_var.set(infinite)
+        assert _box_states(app) == {expected}
+
+
+def test_disabled_run_for_boxes_keep_what_was_typed(app):
+    fill(app, count=3, duration="1d 2h 3m 4s")
+    assert _box_states(app) == {"disabled"}
+    assert {k: v.get() for k, v in app.duration_vars.items()} == {"d": "1", "h": "2", "m": "3", "s": "4"}
+    app.count_var.set("0")
+    assert {k: v.get() for k, v in app.duration_vars.items()} == {"d": "1", "h": "2", "m": "3", "s": "4"}
+    assert app._duration_seconds() == 93784
+
+
+@pytest.mark.parametrize("key, value", [("h", "abc"), ("m", "-5"), ("s", "1.5")])
+def test_garbage_in_disabled_run_for_boxes_does_not_block_adding(app, key, value):
+    fill(app, count=3)
+    app.duration_vars[key].set(value)
+    app.add_job()
+    row = next(iter(app.rows.values()))
+    assert row.job.count == 3 and row.job.duration_s is None
+    assert app.error_label.cget("text") == ""
+
+
+def test_garbage_in_run_for_boxes_still_errors_when_they_are_active(app):
+    fill(app, infinite=True)
+    app.duration_vars["h"].set("abc")
+    app.add_job()
+    assert not app.rows
+    assert "whole numbers" in app.error_label.cget("text")
+
+
+def test_non_numeric_reloads_still_reports_the_reloads_error(app):
+    fill(app, count="abc")
+    app.add_job()
+    assert not app.rows
+    assert "Reloads" in app.error_label.cget("text")
+
+
+def test_reloads_zero_with_a_run_for_time_runs_on_the_timer_alone(app):
+    fill(app, interval=5, count=0, duration="2h")
+    app.add_job()
+    job = next(iter(app.rows.values())).job
+    assert job.count is None and job.duration_s == 7200
+    assert app.error_label.cget("text") == ""
+
+
+def test_reloads_zero_with_no_run_for_time_is_still_rejected(app):
+    fill(app, count=0, duration="")
+    app.add_job()
+    assert not app.rows
+    assert "count" in app.error_label.cget("text")
+
+
+def test_infinite_job_with_run_for_keeps_its_time_limit(app):
+    fill(app, interval=5, infinite=True, duration="2h")
+    app.add_job()
+    job = next(iter(app.rows.values())).job
+    assert job.count is None and job.duration_s == 7200
+
+
+def test_run_for_is_also_off_when_count_comes_from_a_saved_form(app, tmp_path):
+    fill(app, url="https://keep.me", count=4, duration="1h")
+    app.add_job()
+    app.close()
+
+    second = make_app(app.settings_file,
+                      lambda q: Engine(q, headless=True, profile_dir=tmp_path / "p4", channels=(None,)))
+    try:
+        second.withdraw()
+        assert second.count_var.get() == "4"
+        assert {box.cget("state") for box in second.duration_boxes} == {"disabled"}
+        assert second.duration_vars["h"].get() == "1"  # the typed value survived the restart
     finally:
         second.close()
 
@@ -181,7 +303,7 @@ def test_job_without_a_limit_does_not_mention_one(app):
 
 def test_row_shows_time_left_while_running(app):
     from autoreload.engine import JobEvent
-    fill(app, interval=5, duration="2h")
+    fill(app, interval=5, duration="2h", infinite=True)
     app.add_job()
     row = next(iter(app.rows.values()))
 
